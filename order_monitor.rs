@@ -212,6 +212,7 @@ where
 
     async fn lock_order(&self, order: &OrderRequest) -> Result<U256, OrderMonitorErr> {
         let request_id = order.request.id;
+        println!("开始 执行 lock_order ---- request_id: {:?}", request_id);
 
         // let order_status = self
         //     .market
@@ -511,6 +512,8 @@ where
     }
 
     async fn lock_and_prove_orders(&self, orders: &[Arc<OrderRequest>]) -> Result<()> {
+        println!("开始 执行 lock_and_prove_orders ---- lock_and_prove_orders: {:?}", orders);
+
         let lock_jobs = orders.iter().map(|order| {
             async move {
                 let order_id = order.id();
