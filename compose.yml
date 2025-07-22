@@ -204,6 +204,60 @@ services:
               device_ids: ['3']
               capabilities: [gpu]
 
+  gpu_prove_agent4:
+    <<: *agent-common
+    mem_limit: 4G
+    cpus: 4
+    entrypoint: /app/agent -t prove
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['3']
+              capabilities: [gpu]
+
+  gpu_prove_agent5:
+    <<: *agent-common
+    mem_limit: 4G
+    cpus: 4
+    entrypoint: /app/agent -t prove
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['3']
+              capabilities: [gpu]
+
+  gpu_prove_agent6:
+    <<: *agent-common
+    mem_limit: 4G
+    cpus: 4
+    entrypoint: /app/agent -t prove
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['3']
+              capabilities: [gpu]
+
+  gpu_prove_agent7:
+    <<: *agent-common
+    mem_limit: 4G
+    cpus: 4
+    entrypoint: /app/agent -t prove
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['3']
+              capabilities: [gpu]
+
+
+              
   snark_agent:
     <<: *agent-common
     entrypoint: /app/agent -t snark
