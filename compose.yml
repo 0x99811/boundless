@@ -54,6 +54,10 @@ x-broker-common: &broker-common
     - gpu_prove_agent1
     - gpu_prove_agent2
     - gpu_prove_agent3
+    - gpu_prove_agent4
+    - gpu_prove_agent5
+    - gpu_prove_agent6
+    - gpu_prove_agent7
     - exec_agent0
     - exec_agent1
     - aux_agent
@@ -214,7 +218,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['3']
+              device_ids: ['4']
               capabilities: [gpu]
 
   gpu_prove_agent5:
@@ -227,7 +231,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['3']
+              device_ids: ['5']
               capabilities: [gpu]
 
   gpu_prove_agent6:
@@ -240,7 +244,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['3']
+              device_ids: ['6']
               capabilities: [gpu]
 
   gpu_prove_agent7:
@@ -253,7 +257,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['3']
+              device_ids: ['7']
               capabilities: [gpu]
 
 
