@@ -1,6 +1,16 @@
-// Copyright (c) 2025 RISC Zero, Inc.
+// Copyright 2025 RISC Zero, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use crate::chain_monitor::ChainHead;
 use crate::OrderRequest;
@@ -123,6 +133,7 @@ struct OrderMonitorConfig {
     additional_proof_cycles: u64,
     batch_buffer_time_secs: u64,
     order_commitment_priority: OrderCommitmentPriority,
+    priority_addresses: Option<Vec<Address>>,
 }
 
 #[derive(Clone)]
@@ -212,29 +223,28 @@ where
 
     async fn lock_order(&self, order: &OrderRequest) -> Result<U256, OrderMonitorErr> {
         let request_id = order.request.id;
-        println!("开始 执行 lock_order ---- request_id: {:?}", request_id);
 
-        // let order_status = self
-        //     .market
-        //     .get_status(request_id, Some(order.request.expires_at()))
-        //     .await
-        //     .context("Failed to get request status")?;
-        // if order_status != RequestStatus::Unknown {
-        //     tracing::info!("Request {:x} not open: {order_status:?}, skipping", request_id);
-        //     // TODO: fetch some chain data to find out who / and for how much the order
-        //     // was locked in at
-        //     return Err(OrderMonitorErr::AlreadyLocked);
-        // }
+        let order_status = self
+            .market
+            .get_status(request_id, Some(order.request.expires_at()))
+            .await
+            .context("Failed to get request status")?;
+        if order_status != RequestStatus::Unknown {
+            tracing::info!("Request {:x} not open: {order_status:?}, skipping", request_id);
+            // TODO: fetch some chain data to find out who / and for how much the order
+            // was locked in at
+            return Err(OrderMonitorErr::AlreadyLocked);
+        }
 
-        // let is_locked = self
-        //     .db
-        //     .is_request_locked(U256::from(order.request.id))
-        //     .await
-        //     .context("Failed to check if request is locked")?;
-        // if is_locked {
-        //     tracing::warn!("Request 0x{:x} already --------------------------------------, skipping", request_id);
-        //     return Err(OrderMonitorErr::AlreadyLocked);
-        // }
+        let is_locked = self
+            .db
+            .is_request_locked(U256::from(order.request.id))
+            .await
+            .context("Failed to check if request is locked")?;
+        if is_locked {
+            tracing::warn!("Request 0x{:x} already locked: {order_status:?}, skipping", request_id);
+            return Err(OrderMonitorErr::AlreadyLocked);
+        }
 
         let conf_priority_gas = {
             let conf = self.config.lock_all().context("Failed to lock config")?;
@@ -269,7 +279,7 @@ where
                         // 3/ the request may have been fulfilled,
                         // 4/ the requestor may have withdrawn their funds
                         // Currently we don't have a way to determine the cause of the revert.
-                        OrderMonitorErr::LockTxFailed(format!("Tx hash 0x{:x}", e))
+                        OrderMonitorErr::LockTxFailed(format!("Tx hash 0x{e:x}"))
                     }
                     MarketError::Error(e) => {
                         // Insufficient balance error is thrown both when the requestor has insufficient balance,
@@ -283,8 +293,7 @@ where
                                 OrderMonitorErr::InsufficientBalance
                             } else {
                                 OrderMonitorErr::LockTxFailed(format!(
-                                    "Requestor has insufficient balance at lock time: {}",
-                                    e
+                                    "Requestor has insufficient balance at lock time: {e}"
                                 ))
                             }
                         } else if e.to_string().contains("RequestIsLocked") {
@@ -320,8 +329,8 @@ where
             },
             "get_block_by_number",
         )
-            .await
-            .map_err(OrderMonitorErr::UnexpectedError)?;
+        .await
+        .map_err(OrderMonitorErr::UnexpectedError)?;
 
         let lock_price = order
             .request
@@ -512,8 +521,6 @@ where
     }
 
     async fn lock_and_prove_orders(&self, orders: &[Arc<OrderRequest>]) -> Result<()> {
-        println!("开始 执行 lock_and_prove_orders ---- lock_and_prove_orders: {:?}", orders);
-
         let lock_jobs = orders.iter().map(|order| {
             async move {
                 let order_id = order.id();
@@ -585,7 +592,7 @@ where
                         &self.supported_selectors,
                         &order.request,
                     )
-                        .await?,
+                    .await?,
                 ),
             )
         } else {
@@ -595,7 +602,7 @@ where
                     &self.supported_selectors,
                     &order.request,
                 )
-                    .await?,
+                .await?,
             )
         };
 
@@ -645,9 +652,9 @@ where
                     &order.request,
                 )
             }))
-                .await?
-                .iter()
-                .sum::<u64>();
+            .await?
+            .iter()
+            .sum::<u64>();
 
         // Calculate cost in wei
         let committed_cost_wei = U256::from(gas_price) * U256::from(committed_gas_units);
@@ -698,7 +705,7 @@ where
                 tracing::warn!("Proofs are behind what is estimated from peak_prove_khz config by {} seconds. Consider lowering this value to avoid overlocking orders.", seconds_behind);
                 prover_available_at = now;
             }
-            tracing::debug!("Already committed to {} orders, with a total cycle count of {}, a peak khz limit of {}, started working on them at {}, we estimate the prover will be available in {} seconds",
+            tracing::debug!("Already committed to {} orders, with a total cycle count of {}, a peak khz limit of {}, started working on them at {}, we estimate the prover will be available in {} seconds", 
                 num_commited_orders,
                 total_commited_cycles,
                 peak_prove_khz,
@@ -751,7 +758,7 @@ where
                     // Otherwise, we keep the order for the next iteration as capacity may free up in the future.
 
                     if now + proof_time_seconds > expiration {
-                        tracing::info!("Order 0x{:x} cannot be completed before its expiration at {}, proof estimated to take {} seconds and complete at {}. Skipping",
+                        tracing::info!("Order 0x{:x} cannot be completed before its expiration at {}, proof estimated to take {} seconds and complete at {}. Skipping", 
                             order.request.id,
                             expiration,
                             proof_time_seconds,
@@ -822,13 +829,11 @@ where
         self,
         cancel_token: CancellationToken,
     ) -> Result<(), OrderMonitorErr> {
-
-        print!("-------------------------------开始执行start_monitor-------------------------");
         let mut last_block = 0;
         let mut first_block = 0;
         let mut interval = tokio::time::interval_at(
             tokio::time::Instant::now(),
-            tokio::time::Duration::from_secs(1),
+            tokio::time::Duration::from_millis(1),
         );
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -866,11 +871,12 @@ where
                                 additional_proof_cycles: config.market.additional_proof_cycles,
                                 batch_buffer_time_secs: config.batcher.block_deadline_buffer_secs,
                                 order_commitment_priority: config.market.order_commitment_priority,
+                                priority_addresses: config.market.priority_requestor_addresses.clone(),
                             }
                         };
 
                         // Get orders that are valid and ready for locking/proving, skipping orders that are now invalid for proving, due to expiring, being locked by another prover, etc.
-  /*                      let mut valid_orders = self.get_valid_orders(block_timestamp, monitor_config.min_deadline).await?;
+                        let mut valid_orders = self.get_valid_orders(block_timestamp, monitor_config.min_deadline).await?;
 
                         if valid_orders.is_empty() {
                             tracing::trace!(
@@ -881,7 +887,7 @@ where
                         }
 
                         // Prioritize the orders that intend to fulfill based on configured commitment priority.
-                        valid_orders = self.prioritize_orders(valid_orders, monitor_config.order_commitment_priority);
+                        valid_orders = self.prioritize_orders(valid_orders, monitor_config.order_commitment_priority, monitor_config.priority_addresses.as_deref());
 
                         // Filter down the orders given our max concurrent proofs, peak khz limits, and gas limitations.
                         let final_orders = self
@@ -896,37 +902,12 @@ where
                             block_number,
                             block_timestamp,
                             final_orders.len(),
-                        );*/
-
-
-
-
-                        // if !final_orders.is_empty() {
-                        //     // Lock and prove filtered orders.
-                        //     self.lock_and_prove_orders(&final_orders).await?;
-                        // }
-
-
-
-                    print!("-------------------------------开始锁单-------------------------");
-                    // 1. 直接从缓存中暴力获取所有待处理订单，不做任何检查
-                    let mut all_cached_orders: Vec<Arc<OrderRequest>> = Vec::new();
-                    all_cached_orders.extend(self.lock_and_prove_cache.iter().map(|(_, v)| v.clone()));
-                    all_cached_orders.extend(self.prove_cache.iter().map(|(_, v)| v.clone()));
-
-                    // 2. 如果缓存中有任何订单，直接全部拿去尝试锁定
-                    if !all_cached_orders.is_empty() {
-                        tracing::warn!(
-                            "跳过所有的限制直接锁单 {} cached orders.",
-                            all_cached_orders.len()
                         );
-                        // 直接调用 lock_and_prove_orders，绕过所有过滤步骤
-                        self.lock_and_prove_orders(&all_cached_orders).await?;
-                    }
 
-
-
-
+                        if !final_orders.is_empty() {
+                            // Lock and prove filtered orders.
+                            self.lock_and_prove_orders(&final_orders).await?;
+                        }
                     }
                 }
                 _ = cancel_token.cancelled() => {
@@ -1109,8 +1090,8 @@ pub(crate) mod tests {
             format!("file://{ASSESSOR_GUEST_PATH}"),
             Some(signer.address()),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
 
         // Set up market service
         let market_service = BoundlessMarketService::new(
@@ -1155,7 +1136,7 @@ pub(crate) mod tests {
             stake_token_decimals,
             RpcRetryConfig { retry_count: 2, retry_sleep_ms: 500 },
         )
-            .unwrap();
+        .unwrap();
 
         TestCtx {
             monitor,
@@ -1219,7 +1200,7 @@ pub(crate) mod tests {
             let order = ctx.db.get_order(&order_id).await.unwrap().unwrap();
             assert_eq!(order.status, OrderStatus::PendingProving);
         })
-            .await;
+        .await;
     }
 
     // Capacity tests
@@ -1628,7 +1609,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        println!("filtered_orders: {:?}", filtered_orders);
+        println!("filtered_orders: {filtered_orders:?}");
         // 100khz can prove 1m+2m+3m+4m (10m) cycles in 100 seconds
         assert_eq!(filtered_orders.len(), 4);
 
