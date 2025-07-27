@@ -246,10 +246,10 @@ where
                     Ok::<_, OrderPickerErr>(true)
                 }
                 Ok(ProveAfterLockExpire {
-                    total_cycles,
-                    lock_expire_timestamp_secs,
-                    expiry_secs,
-                }) => {
+                       total_cycles,
+                       lock_expire_timestamp_secs,
+                       expiry_secs,
+                   }) => {
                     tracing::info!("Setting order {order_id} to prove after lock expiry at {lock_expire_timestamp_secs}");
                     order.total_cycles = Some(total_cycles);
                     order.target_timestamp = Some(lock_expire_timestamp_secs);
@@ -293,7 +293,7 @@ where
         }
     }
 
-    async fn price_order(
+    async fn price_order_v1(
         &self,
         order: &mut OrderRequest,
     ) -> Result<OrderPricingOutcome, OrderPickerErr> {
@@ -382,10 +382,10 @@ where
         // Short circuit if the order has been locked.
         if order.fulfillment_type == FulfillmentType::LockAndFulfill
             && self
-                .db
-                .is_request_locked(U256::from(order.request.id))
-                .await
-                .context("Failed to check if request is locked before pricing")?
+            .db
+            .is_request_locked(U256::from(order.request.id))
+            .await
+            .context("Failed to check if request is locked before pricing")?
         {
             tracing::debug!("Order {order_id} is already locked, skipping");
             return Ok(Skip);
@@ -393,10 +393,10 @@ where
 
         if order.fulfillment_type == FulfillmentType::FulfillAfterLockExpire
             && self
-                .db
-                .is_request_fulfilled(U256::from(order.request.id))
-                .await
-                .context("Failed to check if request is fulfilled before pricing")?
+            .db
+            .is_request_fulfilled(U256::from(order.request.id))
+            .await
+            .context("Failed to check if request is fulfilled before pricing")?
         {
             tracing::debug!("Order {order_id} is already fulfilled, skipping");
             return Ok(Skip);
@@ -416,16 +416,16 @@ where
                     &self.supported_selectors,
                     &order.request,
                 )
-                .await?,
+                    .await?,
             )
         } else {
             U256::from(
                 utils::estimate_gas_to_lock(&self.config, order).await?
                     + utils::estimate_gas_to_fulfill(
-                        &self.config,
-                        &self.supported_selectors,
-                        &order.request,
-                    )
+                    &self.config,
+                    &self.supported_selectors,
+                    &order.request,
+                )
                     .await?,
             )
         };
@@ -648,29 +648,29 @@ where
                             }
                             Err(err) => match err {
                                 ProverError::ProvingFailed(ref err_msg)
-                                    if err_msg.contains("Session limit exceeded") =>
-                                {
-                                    tracing::debug!(
+                                if err_msg.contains("Session limit exceeded") =>
+                                    {
+                                        tracing::debug!(
                                         "Skipping order {order_id_clone} due to session limit exceeded: {}",
                                         err_msg
                                     );
-                                    Ok(PreflightCacheValue::Skip {
-                                        cached_limit: exec_limit_cycles,
-                                    })
-                                }
+                                        Ok(PreflightCacheValue::Skip {
+                                            cached_limit: exec_limit_cycles,
+                                        })
+                                    }
                                 ProverError::ProvingFailed(ref err_msg)
-                                    if err_msg.contains("GuestPanic") =>
-                                {
-                                    Err(OrderPickerErr::GuestPanic(err_msg.clone()))
-                                }
+                                if err_msg.contains("GuestPanic") =>
+                                    {
+                                        Err(OrderPickerErr::GuestPanic(err_msg.clone()))
+                                    }
                                 _ => Err(OrderPickerErr::UnexpectedErr(Arc::new(err.into()))),
                             },
                         }
                     })
                     .await
             })
-            .await
-            .map_err(|e| OrderPickerErr::UnexpectedErr(Arc::new(e.into())))?;
+                .await
+                .map_err(|e| OrderPickerErr::UnexpectedErr(Arc::new(e.into())))?;
 
             let cached_value = match result {
                 Ok(value) => value,
@@ -694,11 +694,11 @@ where
         // Handle the preflight result
         let (exec_session_id, cycle_count) = match preflight_result {
             Ok(PreflightCacheValue::Success {
-                exec_session_id,
-                cycle_count,
-                image_id,
-                input_id,
-            }) => {
+                   exec_session_id,
+                   cycle_count,
+                   image_id,
+                   input_id,
+               }) => {
                 tracing::debug!(
                     "Using preflight result for {order_id}: session id {} with {} mcycles",
                     exec_session_id,
@@ -760,6 +760,165 @@ where
         }
 
         self.evaluate_order(order, &proof_res, order_gas_cost, lock_expired).await
+    }
+
+    // [核心修改]
+    // 这个函数被完全重写，以实现极致的抢单速度。
+    // 它保留了最基本的、毫秒级的安全检查（如资金、过期），
+    // 但彻底删除了所有耗时的操作（特别是 preflight 和相关缓存逻辑），
+    // 并强制接受所有通过基础检查的订单。
+    async fn price_order(
+        &self,
+        order: &mut OrderRequest,
+    ) -> Result<OrderPricingOutcome, OrderPickerErr> {
+        let order_id = order.id();
+        tracing::debug!("Pricing order {order_id}");
+
+        // --- 第一部分：保留所有快速的、非耗时的检查作为基础安全垫 ---
+
+        let lock_expiration =
+            order.request.offer.biddingStart + order.request.offer.lockTimeout as u64;
+        let order_expiration =
+            order.request.offer.biddingStart + order.request.offer.timeout as u64;
+        let now = now_timestamp();
+        let lock_expired = order.fulfillment_type == FulfillmentType::FulfillAfterLockExpire;
+        let (expiration, lockin_stake) = if lock_expired {
+            (order_expiration, U256::ZERO)
+        } else {
+            (lock_expiration, U256::from(order.request.offer.lockStake))
+        };
+
+        if expiration <= now {
+            tracing::info!("Removing order {order_id} because it has expired");
+            return Ok(Skip);
+        };
+
+        let (min_deadline, allowed_addresses_opt, denied_addresses_opt) = {
+            let config = self.config.lock_all().context("Failed to read config")?;
+            (
+                config.market.min_deadline,
+                config.market.allow_client_addresses.clone(),
+                config.market.deny_requestor_addresses.clone(),
+            )
+        };
+
+        let seconds_left = expiration.saturating_sub(now);
+        if seconds_left <= min_deadline {
+            tracing::info!("Removing order {order_id} because it expires within min_deadline: {seconds_left}, min_deadline: {min_deadline}");
+            return Ok(Skip);
+        }
+
+        if let Some(allow_addresses) = allowed_addresses_opt {
+            let client_addr = order.request.client_address();
+            if !allow_addresses.contains(&client_addr) {
+                tracing::info!("Removing order {order_id} from {client_addr} because it is not in allowed addrs");
+                return Ok(Skip);
+            }
+        }
+
+        if let Some(deny_addresses) = denied_addresses_opt {
+            let client_addr = order.request.client_address();
+            if deny_addresses.contains(&client_addr) {
+                tracing::info!(
+                "Removing order {order_id} from {client_addr} because it is in denied addrs"
+            );
+                return Ok(Skip);
+            }
+        }
+
+        if !self.supported_selectors.is_supported(order.request.requirements.selector) {
+            tracing::info!(
+            "Removing order {order_id} because it has an unsupported selector requirement"
+        );
+            return Ok(Skip);
+        };
+
+        let max_stake = {
+            let config = self.config.lock_all().context("Failed to read config")?;
+            parse_ether(&config.market.max_stake).context("Failed to parse max_stake")?
+        };
+
+        if !lock_expired && lockin_stake > max_stake {
+            tracing::info!("Removing high stake order {order_id}, lock stake: {lockin_stake}, max stake: {max_stake}");
+            return Ok(Skip);
+        }
+
+        if order.fulfillment_type == FulfillmentType::LockAndFulfill
+            && self
+            .db
+            .is_request_locked(U256::from(order.request.id))
+            .await
+            .context("Failed to check if request is locked before pricing")?
+        {
+            tracing::debug!("Order {order_id} is already locked, skipping");
+            return Ok(Skip);
+        }
+
+        if order.fulfillment_type == FulfillmentType::FulfillAfterLockExpire
+            && self
+            .db
+            .is_request_fulfilled(U256::from(order.request.id))
+            .await
+            .context("Failed to check if request is fulfilled before pricing")?
+        {
+            tracing::debug!("Order {order_id} is already fulfilled, skipping");
+            return Ok(Skip);
+        }
+
+        let gas_price =
+            self.chain_monitor.current_gas_price().await.context("Failed to get gas price")?;
+        let order_gas = if lock_expired {
+            U256::from(
+                utils::estimate_gas_to_fulfill(
+                    &self.config,
+                    &self.supported_selectors,
+                    &order.request,
+                )
+                    .await?,
+            )
+        } else {
+            U256::from(
+                utils::estimate_gas_to_lock(&self.config, order).await?
+                    + utils::estimate_gas_to_fulfill(
+                    &self.config,
+                    &self.supported_selectors,
+                    &order.request,
+                )
+                    .await?,
+            )
+        };
+        let order_gas_cost = U256::from(gas_price) * order_gas;
+        let available_gas = self.available_gas_balance().await?;
+        if order_gas_cost > available_gas {
+            tracing::warn!("Estimated there will be insufficient gas for order {order_id} after locking and fulfilling pending orders; available_gas {} ether", format_ether(available_gas));
+            return Ok(Skip);
+        }
+        let available_stake = self.available_stake_balance().await?;
+        if !lock_expired && lockin_stake > available_stake {
+            tracing::warn!(
+            "Insufficient available stake to lock order {order_id}. Requires {lockin_stake}, has {available_stake}"
+        );
+            return Ok(Skip);
+        }
+
+        // --- 第二部分：移除所有耗时的逻辑（Preflight等）并替换为强制通过逻辑 ---
+
+        tracing::warn!("BYPASSING PREFLIGHT and all subsequent checks for order {}", order.id());
+
+        // 根据订单类型，返回一个强制“同意”的结果
+        if order.fulfillment_type == FulfillmentType::LockAndFulfill {
+            return Ok(Lock {
+                total_cycles: 1, // 使用一个虚拟值 1，因为它不再被用于决策
+                target_timestamp_secs: 0, // 0 代表立即执行
+                expiry_secs: order.request.offer.biddingStart + order.request.offer.lockTimeout as u64,
+            });
+        } else { // 适用于 FulfillAfterLockExpire 类型
+            return Ok(ProveAfterLockExpire {
+                total_cycles: 1, // 使用一个虚拟值 1
+                lock_expire_timestamp_secs: order.request.offer.biddingStart + order.request.offer.lockTimeout as u64,
+                expiry_secs: order.request.offer.biddingStart + order.request.offer.timeout as u64,
+            });
+        }
     }
 
     async fn evaluate_order(
@@ -900,7 +1059,7 @@ where
                 &self.supported_selectors,
                 &order.request,
             )
-            .await?;
+                .await?;
             gas += gas_estimate;
         }
         tracing::debug!("Total gas estimate to fulfill pending orders: {}", gas);
@@ -1483,8 +1642,8 @@ pub(crate) mod tests {
                 format!("file://{ASSESSOR_GUEST_PATH}"),
                 Some(signer.address()),
             )
-            .await
-            .unwrap();
+                .await
+                .unwrap();
 
             let boundless_market = BoundlessMarketService::new(
                 market_address,
@@ -2426,8 +2585,8 @@ pub(crate) mod tests {
             MIN_CAPACITY_CHECK_INTERVAL + Duration::from_secs(1),
             ctx.priced_orders_rx.recv(),
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
         // Check that we logged the task being added
         assert!(logs_contain("Current pricing tasks: ["));
