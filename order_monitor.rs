@@ -833,7 +833,7 @@ where
         let mut first_block = 0;
         let mut interval = tokio::time::interval_at(
             tokio::time::Instant::now(),
-            tokio::time::Duration::from_millis(3),
+            tokio::time::Duration::from_millis(10),
         );
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
