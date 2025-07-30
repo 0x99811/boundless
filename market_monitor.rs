@@ -252,6 +252,11 @@ where
         // we should try and move this to a subscription filter if we have issue with the RPC
         // dropping filters
 
+        
+
+
+        
+
         let event = market
             .instance()
             .RequestSubmitted_filter()
@@ -266,6 +271,12 @@ where
                 log_res = stream.next() => {
                     match log_res {
                         Some(Ok((event, _))) => {
+                          println!("monitor_orders ----------------------->>>>>>>>>Processing event: {:?}", event);
+                          println!("monitor_orders ----------------------->>>>>>>>>market_addr {:?}",market_addr);
+                          println!("monitor_orders ------------------------>>>>>>>>>chain_id {:?}",chain_id);
+                          println!("monitor_orders ------------------------->>>>>>>>>new_order_tx {:?}",new_order_tx);
+
+
                             if let Err(err) = Self::process_event(
                                 event,
                                 provider.clone(),
@@ -494,9 +505,18 @@ where
         // ERC1271 signature by calling isValidSignature on the smart contract client. Otherwise we verify the
         // the signature as an ECDSA signature.
         let request_id = RequestId::from_lossy(event.requestId);
+
+        println!("process_event ----------------------->>>>>>>>>request_id: {:?}", request_id);
+
+        
+       
         if request_id.smart_contract_signed {
             let erc1271 = IERC1271::new(request_id.addr, provider);
+            println!("process_event ----------------------->>>>>>>>>erc1271: {:?}", erc1271);
+
             let request_hash = event.request.signing_hash(market_addr, chain_id)?;
+
+            println!("process_event ----------------------->>>>>>>>>request_hash: {:?}", request_hash);
             tracing::debug!(
                 "Validating ERC1271 signature for request 0x{:x}, calling contract: {} with hash {:x}",
                 event.requestId,
@@ -506,6 +526,7 @@ where
             match erc1271.isValidSignature(request_hash, event.clientSignature.clone()).call().await
             {
                 Ok(magic_value) => {
+                    println!("process_event ----------------------->>>>>>>>>magic_value: {:?}", magic_value);
                     if magic_value != ERC1271_MAGIC_VALUE {
                         tracing::warn!("Invalid ERC1271 signature for request 0x{:x}, contract: {} returned magic value: 0x{:x}", event.requestId, request_id.addr, magic_value);
                         return Ok(());
@@ -522,6 +543,11 @@ where
             tracing::warn!("Failed to validate order signature: 0x{:x} - {err:?}", event.requestId);
             return Ok(()); // Return early without propagating the error if signature verification fails.
         }
+
+        println!("process_event ----------------------->>>>>>>>>event.request: {:?}", event.request);
+        println!("process_event ----------------------->>>>>>>>>event.clientSignature: {:?}", event.clientSignature);
+        println!("process_event ----------------------->>>>>>>>>market_addr: {:?}", market_addr);
+        println!("process_event ----------------------->>>>>>>>>chain_id: {:?}", chain_id);
 
         let new_order = OrderRequest::new(
             event.request.clone(),
@@ -567,11 +593,11 @@ where
                 chain_monitor,
                 &new_order_tx,
             )
-            .await
-            .map_err(|err| {
-                tracing::error!("Monitor failed to find open orders on startup.");
-                SupervisorErr::Recover(err)
-            })?;
+                .await
+                .map_err(|err| {
+                    tracing::error!("Monitor failed to find open orders on startup.");
+                    SupervisorErr::Recover(err)
+                })?;
 
             tokio::try_join!(
                 Self::monitor_orders(
@@ -598,7 +624,7 @@ where
                     cancel_token
                 )
             )
-            .map_err(SupervisorErr::Recover)?;
+                .map_err(SupervisorErr::Recover)?;
 
             Ok(())
         })
@@ -653,8 +679,8 @@ mod tests {
             format!("file://{ASSESSOR_GUEST_PATH}"),
             Some(signer.address()),
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         let boundless_market = BoundlessMarketService::new(
             market_address,
             provider.clone(),
