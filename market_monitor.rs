@@ -247,56 +247,90 @@ where
     ) -> Result<(), MarketMonitorErr> {
         let chain_id = provider.get_chain_id().await.context("Failed to get chain id")?;
 
-        let market = BoundlessMarketService::new(market_addr, provider.clone(), Address::ZERO);
-        // TODO: RPC providers can drop filters over time or flush them
-        // we should try and move this to a subscription filter if we have issue with the RPC
-        // dropping filters
-
-        
-
-
-        
-
-        let event = market
-            .instance()
-            .RequestSubmitted_filter()
-            .watch()
+        // 订阅 pending 交易而不是事件
+        let sub = provider
+            .subscribe_pending_transactions()
             .await
-            .context("Failed to subscribe to RequestSubmitted event")?;
-        tracing::info!("Subscribed to RequestSubmitted event");
+            .context("Failed to subscribe to pending transactions")?;
+        let mut stream = sub.into_stream();
 
-        let mut stream = event.into_stream();
+        tracing::info!("Subscribed to pending transactions for market: {:?}", market_addr);
+
+     
+
+
+
         loop {
             tokio::select! {
-                log_res = stream.next() => {
-                    match log_res {
-                        Some(Ok((event, _))) => {
-                          println!("monitor_orders ----------------------->>>>>>>>>Processing event: {:?}", event);
-                          println!("monitor_orders ----------------------->>>>>>>>>market_addr {:?}",market_addr);
-                          println!("monitor_orders ------------------------>>>>>>>>>chain_id {:?}",chain_id);
-                          println!("monitor_orders ------------------------->>>>>>>>>new_order_tx {:?}",new_order_tx);
+                tx_hash_res = stream.next() => {
+                    match tx_hash_res {
+                        Some(tx_hash) => {
+                            let provider_clone = provider.clone();
+                            let new_order_tx_clone = new_order_tx.clone();
+                            let market_addr_clone = market_addr;
+                            let chain_id_clone = chain_id;
+
+                            tokio::spawn(async move {
+                                // 获取交易详情
+                                let tx = match provider_clone.get_transaction_by_hash(tx_hash).await {
+                                    Ok(Some(tx)) => tx,
+                                    Ok(None) => return, // 交易未找到，可能已被打包或丢弃
+                                    Err(err) => {
+                                        tracing::warn!("Failed to get transaction {}: {:?}", tx_hash, err);
+                                        return;
+                                    }
+                                };
+
+                                // 检查是否是目标合约的交易
+                                if tx.to() != Some(market_addr_clone) {
+                                    return;
+                                }
+
+                                // 检查 input 是否足够长，并且是 submitRequest 的函数选择器
+                                // IBoundlessMarket::submitRequestCall::SELECTOR 是由 alloy! 宏生成的，用于识别 submitRequest 函数的唯一标识符
+                                if tx.input().len() >= 4 && &tx.input()[..4] == &IBoundlessMarket::submitRequestCall::SELECTOR {
+                                    match IBoundlessMarket::submitRequestCall::abi_decode(tx.input()) {
+                                        Ok(call_data) => {
+                                            tracing::info!("Detected submitRequest call in mempool: 0x{:x}", tx_hash);
+
+                                            // 构造 RequestSubmitted 事件类型对象，以便复用 process_event
+                                            // 尽管这不是一个真正的链上事件日志，但它的结构与 RequestSubmitted 事件一致，可以传递给 process_event
+                                            let event_like_object = IBoundlessMarket::RequestSubmitted {
+                                                requestId: call_data.request.id,
+                                                request: call_data.request,
+                                                clientSignature: call_data.clientSignature,
+                                            };
 
 
-                            if let Err(err) = Self::process_event(
-                                event,
-                                provider.clone(),
-                                market_addr,
-                                chain_id,
-                                &new_order_tx,
-                            )
-                            .await
-                            {
-                                let event_err = MarketMonitorErr::LogProcessingFailed(err);
-                                tracing::error!("Failed to process event log: {event_err:?}");
-                            }
-                        }
-                        Some(Err(err)) => {
-                            let event_err = MarketMonitorErr::EventPollingErr(anyhow::anyhow!(err));
-                            tracing::warn!("Failed to fetch event log: {event_err:?}");
+                                            println!("monitor_orders----------event_like_object: {:?}", event_like_object);
+
+                                            if let Err(err) = Self::process_event(
+                                                event_like_object,
+                                                provider_clone,
+                                                market_addr_clone,
+                                                chain_id_clone,
+                                                &new_order_tx_clone,
+                                            )
+                                            .await
+                                            {
+                                                let event_err = MarketMonitorErr::LogProcessingFailed(anyhow::anyhow!(err));
+                                                tracing::error!("Failed to process mempool order: {event_err:?}");
+                                            }
+                                        }
+                                        Err(err) => {
+                                            // 解码失败，可能不是预期的 submitRequest 调用，或者数据格式有问题
+                                            tracing::debug!("Failed to decode submitRequest call for tx {}: {:?}", tx_hash, err);
+                                        }
+                                    }
+                                } else {
+                                    // 交易不是目标市场的 submitRequest 调用，忽略
+                                    tracing::debug!("Transaction {} not a target market submitRequest call, or input too short", tx_hash);
+                                }
+                            });
                         }
                         None => {
                             return Err(MarketMonitorErr::EventPollingErr(anyhow::anyhow!(
-                                "Event polling exited, polling failed (possible RPC error)"
+                                "Pending transactions stream ended"
                             )));
                         }
                     }
@@ -505,18 +539,9 @@ where
         // ERC1271 signature by calling isValidSignature on the smart contract client. Otherwise we verify the
         // the signature as an ECDSA signature.
         let request_id = RequestId::from_lossy(event.requestId);
-
-        println!("process_event ----------------------->>>>>>>>>request_id: {:?}", request_id);
-
-        
-       
         if request_id.smart_contract_signed {
             let erc1271 = IERC1271::new(request_id.addr, provider);
-            println!("process_event ----------------------->>>>>>>>>erc1271: {:?}", erc1271);
-
             let request_hash = event.request.signing_hash(market_addr, chain_id)?;
-
-            println!("process_event ----------------------->>>>>>>>>request_hash: {:?}", request_hash);
             tracing::debug!(
                 "Validating ERC1271 signature for request 0x{:x}, calling contract: {} with hash {:x}",
                 event.requestId,
@@ -526,7 +551,6 @@ where
             match erc1271.isValidSignature(request_hash, event.clientSignature.clone()).call().await
             {
                 Ok(magic_value) => {
-                    println!("process_event ----------------------->>>>>>>>>magic_value: {:?}", magic_value);
                     if magic_value != ERC1271_MAGIC_VALUE {
                         tracing::warn!("Invalid ERC1271 signature for request 0x{:x}, contract: {} returned magic value: 0x{:x}", event.requestId, request_id.addr, magic_value);
                         return Ok(());
@@ -543,11 +567,6 @@ where
             tracing::warn!("Failed to validate order signature: 0x{:x} - {err:?}", event.requestId);
             return Ok(()); // Return early without propagating the error if signature verification fails.
         }
-
-        println!("process_event ----------------------->>>>>>>>>event.request: {:?}", event.request);
-        println!("process_event ----------------------->>>>>>>>>event.clientSignature: {:?}", event.clientSignature);
-        println!("process_event ----------------------->>>>>>>>>market_addr: {:?}", market_addr);
-        println!("process_event ----------------------->>>>>>>>>chain_id: {:?}", chain_id);
 
         let new_order = OrderRequest::new(
             event.request.clone(),
@@ -593,11 +612,11 @@ where
                 chain_monitor,
                 &new_order_tx,
             )
-                .await
-                .map_err(|err| {
-                    tracing::error!("Monitor failed to find open orders on startup.");
-                    SupervisorErr::Recover(err)
-                })?;
+            .await
+            .map_err(|err| {
+                tracing::error!("Monitor failed to find open orders on startup.");
+                SupervisorErr::Recover(err)
+            })?;
 
             tokio::try_join!(
                 Self::monitor_orders(
@@ -624,7 +643,7 @@ where
                     cancel_token
                 )
             )
-                .map_err(SupervisorErr::Recover)?;
+            .map_err(SupervisorErr::Recover)?;
 
             Ok(())
         })
@@ -679,8 +698,8 @@ mod tests {
             format!("file://{ASSESSOR_GUEST_PATH}"),
             Some(signer.address()),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         let boundless_market = BoundlessMarketService::new(
             market_address,
             provider.clone(),
