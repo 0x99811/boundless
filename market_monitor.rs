@@ -46,6 +46,13 @@ use crate::{
 };
 use thiserror::Error;
 
+
+
+
+use crate::ws_provider::get_ws_provider;
+
+
+
 const BLOCK_TIME_SAMPLE_SIZE: u64 = 10;
 
 #[derive(Error)]
@@ -251,30 +258,15 @@ where
         let chain_id = provider.get_chain_id().await.context("Failed to get chain id")?;
 
 
-                // 使用你自己的 WebSocket 节点 URL
-        let ws_url = "wss://base.blockpi.network/v1/ws/69951510051d1ef8e9809575fd95ba9a20748a8d";
 
-        // 创建 WebSocket 连接
-        println!("正在连接到 WebSocket 节点: {}", ws_url);
-        let ws = WsConnect::new(
-            Url::parse(ws_url)
-                .map_err(|e| MarketMonitorErr::UnexpectedErr(anyhow::anyhow!(e)))?
-        );
 
 
         
-        
-        let my_provider = Arc::new(
-            ProviderBuilder::new()
-                .on_ws(ws)
-                .await
-                .map_err(|e| MarketMonitorErr::UnexpectedErr(anyhow::anyhow!(e)))?
-        );
 
 
         
-        println!("连接成功!");
-
+        // 在 monitor_orders() 里直接调用
+        let my_provider = get_ws_provider().await?;
 
 
         // 订阅 pending 交易而不是事件
