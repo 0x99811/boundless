@@ -256,8 +256,23 @@ where
 
         // 创建 WebSocket 连接
         println!("正在连接到 WebSocket 节点: {}", ws_url);
-        let ws = WsConnect::new(Url::parse(ws_url)?);
-        let my_provider = Arc::new(ProviderBuilder::new().on_ws(ws).await?);
+        let ws = WsConnect::new(
+            Url::parse(ws_url)
+                .map_err(|e| MarketMonitorErr::UnexpectedErr(anyhow::anyhow!(e)))?
+        );
+
+
+        
+        
+        let my_provider = Arc::new(
+            ProviderBuilder::new()
+                .on_ws(ws)
+                .await
+                .map_err(|e| MarketMonitorErr::UnexpectedErr(anyhow::anyhow!(e)))?
+        );
+
+
+        
         println!("连接成功!");
 
 
