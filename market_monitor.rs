@@ -249,8 +249,20 @@ where
     ) -> Result<(), MarketMonitorErr> {
         let chain_id = provider.get_chain_id().await.context("Failed to get chain id")?;
 
+
+                // 使用你自己的 WebSocket 节点 URL
+        let ws_url = "wss://base.blockpi.network/v1/ws/69951510051d1ef8e9809575fd95ba9a20748a8d";
+
+        // 创建 WebSocket 连接
+        println!("正在连接到 WebSocket 节点: {}", ws_url);
+        let ws = WsConnect::new(Url::parse(ws_url)?);
+        let my_provider = Arc::new(ProviderBuilder::new().on_ws(ws).await?);
+        println!("连接成功!");
+
+
+
         // 订阅 pending 交易而不是事件
-        let sub = provider
+        let sub = my_provider
             .subscribe_pending_transactions()
             .await
             .context("Failed to subscribe to pending transactions")?;
