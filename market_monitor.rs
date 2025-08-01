@@ -17,12 +17,13 @@ use std::sync::Arc;
 use alloy::{
     network::Ethereum,
     primitives::{Address, U256},
-    providers::Provider,
+    providers::{Provider, ProviderBuilder},
     rpc::types::Filter,
     sol,
     sol_types::SolEvent,
     consensus::Transaction,
     sol_types::SolCall, 
+    rpc::client::WsConnect,
 };
 
 use anyhow::{Context, Result};
