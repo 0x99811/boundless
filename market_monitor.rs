@@ -256,6 +256,12 @@ where
 
         tracing::info!("Subscribed to pending transactions for market: {:?}", market_addr);
 
+        tracing::info!("monitor_orders-----------provider: {:?}", provider);
+
+
+
+
+
      
 
 
