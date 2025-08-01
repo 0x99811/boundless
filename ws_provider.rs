@@ -17,7 +17,7 @@ pub async fn get_ws_provider() -> Result<Arc<impl Provider>, MarketMonitorErr> {
                 .install_default()
                 .expect("无法设置 rustls 加密提供程序");
 
-            let ws_url = "wss://base.blockpi.network/v1/ws/69951510051d1ef8e9809575fd95ba9a20748a8d";
+            let ws_url = "";
             println!("正在连接到 WebSocket 节点: {}", ws_url);
 
             let ws = WsConnect::new(
