@@ -22,6 +22,7 @@ use alloy::{
     sol,
     sol_types::SolEvent,
     consensus::Transaction,
+    sol_types::SolCall, 
 };
 
 use anyhow::{Context, Result};
