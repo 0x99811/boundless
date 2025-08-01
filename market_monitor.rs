@@ -17,7 +17,7 @@ use std::sync::Arc;
 use alloy::{
     network::Ethereum,
     primitives::{Address, U256},
-    providers::Provider,
+    providers::{Provider, ProviderBuilder},
     rpc::types::Filter,
     sol,
     sol_types::SolEvent,
