@@ -21,6 +21,7 @@ use alloy::{
     rpc::types::Filter,
     sol,
     sol_types::SolEvent,
+    consensus::Transaction,
 };
 
 use anyhow::{Context, Result};
@@ -255,12 +256,6 @@ where
         let mut stream = sub.into_stream();
 
         tracing::info!("Subscribed to pending transactions for market: {:?}", market_addr);
-
-        tracing::info!("monitor_orders-----------provider: {:?}", provider);
-
-
-
-
 
      
 
