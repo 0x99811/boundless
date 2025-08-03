@@ -23,9 +23,8 @@ use alloy::{
     sol_types::SolEvent,
     consensus::Transaction,
     sol_types::SolCall, 
-    rpc::client::WsConnect,
+   
 };
-use url::Url;
 use anyhow::{Context, Result};
 use boundless_market::{
     contracts::{
@@ -257,20 +256,19 @@ where
     ) -> Result<(), MarketMonitorErr> {
         let chain_id = provider.get_chain_id().await.context("Failed to get chain id")?;
 
-
-
-
-
-        
+        let provider_type_name = std::any::type_name::<P>();
+        tracing::info!(" 类型检测 [PROVIDER CHECK] Entering monitor_orders with provider type: {}", provider_type_name);
+        println!("类型检测 [PROVIDER CHECK] monitor_orders received provider of type: {}\n", provider_type_name);
+    
 
 
         
         // 在 monitor_orders() 里直接调用
-        let my_provider = get_ws_provider().await?;
+        //let my_provider = get_ws_provider().await?;
 
 
         // 订阅 pending 交易而不是事件
-        let sub = my_provider
+        let sub = provider
             .subscribe_pending_transactions()
             .await
             .context("Failed to subscribe to pending transactions")?;
