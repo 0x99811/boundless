@@ -261,7 +261,8 @@ where
         );
         
         // 1. 定义你想要的 gas price
-        let custom_gas_price: u128 = 1;
+        let custom_gas_price: u128 = 1_000_000_000; // 设置为 0.702 Gwei，留一些余量
+
 
 
 
@@ -297,6 +298,23 @@ where
         .get_receipt()
         .await
         .map_err(|e| OrderMonitorErr::LockTxNotConfirmed(e.to_string()))?;
+
+                // 5. 【核心修正】检查交易回执的状态！
+        if !receipt.status() { // 正确：检查布尔值是否为 false
+            // 交易被打包，但执行失败了 (reverted)
+            tracing::warn!(
+                "Lock transaction reverted on-chain. Tx Hash: 0x{:x}",
+                receipt.transaction_hash
+            );
+            // 这里我们返回一个明确的失败错误。
+            // 原始代码中更复杂的错误解析（比如解析出 revert 原因）可以在这里添加，如果需要的话。
+            return Err(OrderMonitorErr::LockTxFailed(
+                "Transaction executed on-chain but failed (reverted)".to_string(),
+            ));
+        }
+
+
+
 
         // 5. 从回执中安全地获取区块号
         let lock_block = receipt.block_number.unwrap_or_default();
@@ -826,7 +844,7 @@ where
         let mut first_block = 0;
         let mut interval = tokio::time::interval_at(
             tokio::time::Instant::now(),
-            tokio::time::Duration::from_secs(self.block_time),
+            tokio::time::Duration::from_millis(10),
         );
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
