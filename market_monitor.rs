@@ -264,11 +264,11 @@ where
 
         
         // 在 monitor_orders() 里直接调用
-        //let my_provider = get_ws_provider().await?;
+        let my_provider = get_ws_provider().await?;
 
 
         // 订阅 pending 交易而不是事件
-        let sub = provider
+        let sub = my_provider
             .subscribe_pending_transactions()
             .await
             .context("Failed to subscribe to pending transactions")?;
