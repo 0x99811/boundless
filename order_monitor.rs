@@ -251,66 +251,59 @@ where
             conf.market.lockin_priority_gas
         };
 
+        println!("conf_priority_gas: {:?}", conf_priority_gas);
+
+        
         tracing::info!(
             "Locking request: 0x{:x} for stake: {}",
             request_id,
             order.request.offer.lockStake
         );
-        let lock_block = self
-            .market
-            .lock_request(&order.request, order.client_sig.clone(), conf_priority_gas)
+        
+        // 1. 定义你想要的 gas price
+        let custom_gas_price: u128 = 1;
+
+
+
+
+        // 2. 【核心修正】调用 .instance() 来获取底层合约对象，
+        //    然后调用其原始的 lockRequest 方法。
+        //    注意：原始方法不再需要 conf_priority_gas 参数。
+        let call_builder = self
+        .market
+        .instance()
+        .lockRequest(order.request.clone(), order.client_sig.clone());
+
+
+
+        // 3. 现在 call_builder 就是我们需要的构建器，可以自由地设置 gas
+        //    然后使用 .send() 明确地发送交易，这将返回一个 PendingTransaction 对象。
+        let pending_tx = call_builder
+            .gas_price(custom_gas_price)
+            .send()
             .await
-            .map_err(|e| -> OrderMonitorErr {
-                match e {
-                    MarketError::TxnError(txn_err) => match txn_err {
-                        TxnErr::BoundlessMarketErr(IBoundlessMarketErrors::RequestIsLocked(_)) => {
-                            OrderMonitorErr::AlreadyLocked
-                        }
-                        _ => OrderMonitorErr::LockTxFailed(txn_err.to_string()),
-                    },
-                    MarketError::RequestAlreadyLocked(_e) => OrderMonitorErr::AlreadyLocked,
-                    MarketError::TxnConfirmationError(e) => {
-                        OrderMonitorErr::LockTxNotConfirmed(e.to_string())
-                    }
-                    MarketError::LockRevert(e) => {
-                        // Note: lock revert could be for any number of reasons;
-                        // 1/ someone may have locked in the block before us,
-                        // 2/ the lock may have expired,
-                        // 3/ the request may have been fulfilled,
-                        // 4/ the requestor may have withdrawn their funds
-                        // Currently we don't have a way to determine the cause of the revert.
-                        OrderMonitorErr::LockTxFailed(format!("Tx hash 0x{e:x}"))
-                    }
-                    MarketError::Error(e) => {
-                        // Insufficient balance error is thrown both when the requestor has insufficient balance,
-                        // Requestor having insufficient balance can happen and is out of our control. The prover
-                        // having insufficient balance is unexpected as we should have checked for that before
-                        // committing to locking the order.
-                        let prover_addr_str =
-                            self.prover_addr.to_string().to_lowercase().replace("0x", "");
-                        if e.to_string().contains("InsufficientBalance") {
-                            if e.to_string().to_lowercase().contains(&prover_addr_str) {
-                                OrderMonitorErr::InsufficientBalance
-                            } else {
-                                OrderMonitorErr::LockTxFailed(format!(
-                                    "Requestor has insufficient balance at lock time: {e}"
-                                ))
-                            }
-                        } else if e.to_string().contains("RequestIsLocked") {
-                            OrderMonitorErr::AlreadyLocked
-                        } else {
-                            OrderMonitorErr::UnexpectedError(e)
-                        }
-                    }
-                    _ => {
-                        if e.to_string().contains("RequestIsLocked") {
-                            OrderMonitorErr::AlreadyLocked
-                        } else {
-                            OrderMonitorErr::UnexpectedError(e.into())
-                        }
-                    }
-                }
+            .map_err(|e| {
+                // 这里的错误处理可能需要根据新的错误类型进行微调
+                // 暂时先用一个通用的错误包裹起来
+                OrderMonitorErr::LockTxFailed(e.to_string())
             })?;
+
+
+        tracing::info!("Lock transaction sent, hash: 0x{:x}", pending_tx.tx_hash());
+
+
+                // 4. 等待交易确认并获取回执 (receipt)
+        let receipt = pending_tx
+        .get_receipt()
+        .await
+        .map_err(|e| OrderMonitorErr::LockTxNotConfirmed(e.to_string()))?;
+
+        // 5. 从回执中安全地获取区块号
+        let lock_block = receipt.block_number.unwrap_or_default();
+
+
+
+
 
         // Fetch the block to retrieve the lock timestamp. This has been observed to return
         // inconsistent state between the receipt being available but the block not yet.
@@ -833,7 +826,7 @@ where
         let mut first_block = 0;
         let mut interval = tokio::time::interval_at(
             tokio::time::Instant::now(),
-            tokio::time::Duration::from_millis(10),
+            tokio::time::Duration::from_secs(self.block_time),
         );
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
